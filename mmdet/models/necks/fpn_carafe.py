@@ -1,13 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch.nn as nn
-from mmcv.cnn import ConvModule, build_upsample_layer, xavier_init
+from mmcv.cnn import ConvModule, build_upsample_layer
 from mmcv.ops.carafe import CARAFEPack
-from mmcv.runner import BaseModule, ModuleList
+from mmengine.model import BaseModule, ModuleList, xavier_init
 
-from ..builder import NECKS
+from mmdet.registry import MODELS
 
 
-@NECKS.register_module()
+@MODELS.register_module()
 class FPN_CARAFE(BaseModule):
     """FPN_CARAFE is a more flexible implementation of FPN. It allows more
     choice for upsample methods during the top-down pathway.
@@ -77,14 +77,14 @@ class FPN_CARAFE(BaseModule):
                 'upsample_kernel') and self.upsample_cfg.upsample_kernel > 0
             self.upsample_kernel = self.upsample_cfg.pop('upsample_kernel')
 
-        if end_level == -1:
+        if end_level == -1 or end_level == self.num_ins - 1:
             self.backbone_end_level = self.num_ins
             assert num_outs >= self.num_ins - start_level
         else:
-            # if end_level < inputs, no extra level is allowed
-            self.backbone_end_level = end_level
-            assert end_level <= len(in_channels)
-            assert num_outs == end_level - start_level
+            # if end_level is not the last level, no extra level is allowed
+            self.backbone_end_level = end_level + 1
+            assert end_level < self.num_ins
+            assert num_outs == end_level - start_level + 1
         self.start_level = start_level
         self.end_level = end_level
 

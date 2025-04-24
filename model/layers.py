@@ -6,7 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from mmdet.models import BaseRoIExtractor
-from mmcv.cnn import ConvModule, Linear, normal_init
+from mmcv.cnn import ConvModule, Linear
+from mmengine.model import normal_init
 
 
 def str2reg(input_str):

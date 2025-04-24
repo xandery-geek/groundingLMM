@@ -61,11 +61,21 @@ description = """
 
 **Usage** : <br>
 &ensp;(1) For **Grounded Caption Generation** Interleaved Segmentation, input prompt like: *"Could you provide me with a detailed analysis of this photo? Please output with interleaved segmentation masks for the corresponding parts of the answer."* <br>
-&ensp;(2) For **Segmentation Output**, input prompt like: *"Can you please segment xxx in the given image"* <br>
-&ensp;(3) To **Input Regions** : Draw boudning boxes over the uploaded image and input prompt like: *"Can you please describe this region &lt;bbox&gt;"* Need to give &lt;bbox&gt; identifier <br>
+&ensp;(2) For **Referring Segmentation Output**, input prompt like: *"Can you please segment xxx in the given image?"* <br>
+&ensp;(3) For **Reasoning Segmentation Output**, input prompt like: *"Which part of this picture looks strange? Please output segmentation mask."* <br>
 &ensp;(4) For **Image Captioning** VQA, input prompt like: *"Could you please give me a detailed description of the image?"* <br>
-&ensp;(5) For **Conditional Generation** Image manipulation, first perform (2) then select generate and input prompt which describes the new image to be generated <br>
 """
+
+# description = """
+# [![Website](https://img.shields.io/badge/Project-Website-87CEEB)](https://mbzuai-oryx.github.io/groundingLMM)
+
+# **Usage** : <br>
+# &ensp;(1) For **Grounded Caption Generation** Interleaved Segmentation, input prompt like: *"Could you provide me with a detailed analysis of this photo? Please output with interleaved segmentation masks for the corresponding parts of the answer."* <br>
+# &ensp;(2) For **Segmentation Output**, input prompt like: *"Can you please segment xxx in the given image"* <br>
+# &ensp;(3) To **Input Regions** : Draw boudning boxes over the uploaded image and input prompt like: *"Can you please describe this region &lt;bbox&gt;"* Need to give &lt;bbox&gt; identifier <br>
+# &ensp;(4) For **Image Captioning** VQA, input prompt like: *"Could you please give me a detailed description of the image?"* <br>
+# &ensp;(5) For **Conditional Generation** Image manipulation, first perform (2) then select generate and input prompt which describes the new image to be generated <br>
+# """
 
 article = """
 <center> This is the online demo of GLaMM from MBZUAI. \n </center>
@@ -94,7 +104,7 @@ colors = [
 
 
 def process_markdown(output_str, color_history):
-    markdown_out = output_str.replace('[SEG]', '')
+    markdown_out = output_str.replace('</s>', '')
     markdown_out = markdown_out.replace(
         "<p>", "<span class='highlighted-response' style='background-color:rgb[COLOR]'>"
     )
@@ -103,11 +113,7 @@ def process_markdown(output_str, color_history):
     for color in color_history:
         markdown_out = markdown_out.replace("[COLOR]", str(desaturate(tuple(color))), 1)
 
-    markdown_out = f""" 
-    <br>
-    {markdown_out}
-
-    """
+    markdown_out = f"""<br>{markdown_out}"""
     markdown_out = markdown_default + "<p><span class='regular-text'>" + markdown_out + '</span></p>'
     return markdown_out
 

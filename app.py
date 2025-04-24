@@ -1,29 +1,28 @@
+import os
 import sys
 import cv2
 import random
 import argparse
+import torch
 import gradio as gr
 import numpy as np
-from PIL import Image
-import torch
 import torch.nn.functional as F
+from copy import deepcopy
+from PIL import Image
 from transformers import AutoTokenizer, CLIPImageProcessor
-from diffusers import AutoPipelineForInpainting
-from diffusers.utils import load_image
 
 from model.GLaMM import GLaMMForCausalLM
 from model.llava import conversation as conversation_lib
 from model.llava.mm_utils import tokenizer_image_token
 from model.SAM.utils.transforms import ResizeLongestSide
-from tools.generate_utils import center_crop, create_feathered_mask
 from tools.utils import DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IMAGE_TOKEN, IMAGE_TOKEN_INDEX
-from tools.markdown_utils import (markdown_default, examples, title, description, article, process_markdown, colors,
-                                  draw_bbox, ImageSketcher)
+from tools.markdown_utils import (markdown_default, examples, title, description, article, process_markdown, colors, draw_bbox)
 
 
 def parse_args(args):
     parser = argparse.ArgumentParser(description="GLaMM Model Demo")
-    parser.add_argument("--version", default="MBZUAI/GLaMM-FullScope")
+    parser.add_argument("--device", default="0", type=int, help="Device ID to use")
+    parser.add_argument("--version", default="/home/24098672r/Weights/GLaMM-FullScope")
     parser.add_argument("--vis_save_path", default="./vis_output", type=str)
     parser.add_argument("--precision", default='bf16', type=str)
     parser.add_argument("--image_size", default=1024, type=int, help="Image size for grounding image encoder")
@@ -33,6 +32,8 @@ def parse_args(args):
     parser.add_argument("--local-rank", default=0, type=int, help="node rank")
     parser.add_argument("--use_mm_start_end", action="store_true", default=True)
     parser.add_argument("--conv_type", default="llava_v1", type=str, choices=["llava_v1", "llava_llama_2"])
+    parser.add_argument("--enable_generation", action="store_true", default=False)
+    parser.add_argument('--output_dir', type=str, default='outputs', help='Directory to save output images')
 
     return parser.parse_args(args)
 
@@ -117,75 +118,50 @@ def region_enc_processor(orig_size, post_size, bbox_img):
     return bboxes
 
 
-def prepare_mask(input_image, image_np, pred_masks, text_output, color_history):
-    save_img = None
-    for i, pred_mask in enumerate(pred_masks):
-        if pred_mask.shape[0] == 0:
-            continue
-        pred_mask = pred_mask.detach().cpu().numpy()
-        mask_list = [pred_mask[i] for i in range(pred_mask.shape[0])]
-        if len(mask_list) > 0:
-            save_img = image_np.copy()
-            colors_temp = colors
-            seg_count = text_output.count("[SEG]")
-            mask_list = mask_list[-seg_count:]
-            for curr_mask in mask_list:
-                color = random.choice(colors_temp)
-                if len(colors_temp) > 0:
-                    colors_temp.remove(color)
-                else:
-                    colors_temp = colors
-                color_history.append(color)
-                curr_mask = curr_mask > 0
-                save_img[curr_mask] = (image_np * 0.5 + curr_mask[:, :, None].astype(np.uint8) * np.array(color) * 0.5)[
-                    curr_mask]
+def process_image(input_image, image_np, pred_masks, text_output, color_history):
+    assert len(pred_masks) == 1
+
+    pred_mask = pred_masks[0]
+    if pred_mask.shape[0] == 0:
+        return None
+    
+    pred_mask = pred_mask.detach().cpu().numpy()
+    mask_list = [pred_mask[i] for i in range(pred_mask.shape[0])]
+    
+    output_image_np = image_np.copy()
+    colors_temp = deepcopy(colors)
+    
+    seg_count = text_output.count("[SEG]")
+    mask_list = mask_list[-seg_count:]
+    for curr_mask in mask_list:
+        color = random.choice(colors_temp)
+        colors_temp.remove(color)
+        if len(colors_temp) == 0:
+            colors_temp = deepcopy(colors)
+
+        color_history.append(color)
+        curr_mask = curr_mask > 0
+        output_image_np[curr_mask] = (image_np * 0.5 + curr_mask[:, :, None].astype(np.uint8) * np.array(color) * 0.5)[curr_mask]
+    
     seg_mask = np.zeros((curr_mask.shape[0], curr_mask.shape[1], 3), dtype=np.uint8)
     seg_mask[curr_mask] = [255, 255, 255]  # white for True values
     seg_mask[~curr_mask] = [0, 0, 0]  # black for False values
-    seg_mask = Image.fromarray(seg_mask)
-    mask_path = input_image.replace('image', 'mask')
-    seg_mask.save(mask_path)
 
-    return save_img
+    mask_img = Image.fromarray(seg_mask)
+    mask_img.save(os.path.join(output_mask_path, os.path.basename(input_image)))
+    output_img = Image.fromarray(output_image_np)
+    output_img.save(os.path.join(output_image_path, os.path.basename(input_image)))
 
-
-def generate_new_image(st_pipe, input_str, input_image):
-    global mask_path
-    if mask_path is None:
-        raise gr.Error("No Segmentation Mask")
-
-    og_image = load_image(input_image)
-    st_image, c_box = center_crop(og_image)
-    im_height = st_image.size[0]
-    st_image = st_image.resize((1024, 1024))
-    st_mask = load_image(mask_path)
-    st_mask, c_box = center_crop(st_mask)
-    st_mask = st_mask.resize((1024, 1024))
-
-    st_generator = torch.Generator(device="cuda").manual_seed(0)
-    st_out = st_pipe(
-        prompt=input_str, image=st_image, mask_image=st_mask, guidance_scale=8.0, num_inference_steps=20, strength=0.99,
-        generator=st_generator, ).images[0]
-
-    st_out = st_out.resize((im_height, im_height))
-    feathered_mask = create_feathered_mask(st_out.size)
-    og_image.paste(st_out, c_box, feathered_mask)
-    st_text_out = "Sure, Here's the new image"
-    st_text_out = process_markdown(st_text_out, [])
-
-    return og_image, st_text_out
+    return output_image_np
 
 
-def inference(input_str, all_inputs, follow_up, generate):
-    bbox_img = all_inputs['boxes']
-    input_image = all_inputs['image']
+def inference(input_str, input_image, follow_up, generate=False):
+    global conv, conv_history
 
+    bbox_img = []
     print("input_str: ", input_str, "input_image: ", input_image)
 
-    if generate:
-        return generate_new_image(st_pipe, input_str, input_image)
-
-    if not follow_up:
+    if not follow_up or conv is None:
         conv = conversation_lib.conv_templates[args.conv_type].copy()
         conv.messages = []
         conv_history = {'user': [], 'model': []}
@@ -248,19 +224,21 @@ def inference(input_str, all_inputs, follow_up, generate):
     conv.append_message(conv.roles[1], text_output)
     conv_history["model"].append(text_output)
     color_history = []
-    save_img = None
+    
     if "[SEG]" in text_output:
-        save_img = prepare_mask(input_image, image_np, pred_masks, text_output, color_history)
+        output_image_np = process_image(input_image, image_np, pred_masks, text_output, color_history)
+    else:
+        output_image_np = None
 
-    output_str = text_output  # input_str
-    if save_img is not None:
-        output_image = save_img  # input_image
+    if output_image_np is not None:
+        output_image = output_image_np
     else:
         if len(bbox_img) > 0:
             output_image = draw_bbox(image_np.copy(), bbox_img)
         else:
-            output_image = input_image
+            output_image = image_np
 
+    output_str = text_output
     markdown_out = process_markdown(output_str, color_history)
 
     return output_image, markdown_out
@@ -268,6 +246,14 @@ def inference(input_str, all_inputs, follow_up, generate):
 
 if __name__ == "__main__":
     args = parse_args(sys.argv[1:])
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.device)
+
+    output_mask_path = os.path.join(args.output_dir, "masks")
+    output_image_path = os.path.join(args.output_dir, "images")
+    os.makedirs(output_mask_path, exist_ok=True)
+    os.makedirs(output_image_path, exist_ok=True)
+
+    # Initialize Model
     tokenizer = setup_tokenizer_and_special_tokens(args)
     model = initialize_model(args, tokenizer)
     model = prepare_model_for_inference(model, args)
@@ -275,22 +261,24 @@ if __name__ == "__main__":
     transform = ResizeLongestSide(args.image_size)
     model.eval()
 
-    st_pipe = AutoPipelineForInpainting.from_pretrained(
-        "diffusers/stable-diffusion-xl-1.0-inpainting-0.1", torch_dtype=torch.float16, variant="fp16"
-    ).to("cuda")
-
     conv = None
-    # Only to Display output
     conv_history = {'user': [], 'model': []}
-    mask_path = None
 
-    demo = gr.Interface(
-        inference, inputs=[gr.Textbox(lines=1, placeholder=None, label="Text Instruction"), ImageSketcher(
-            type='filepath', label='Input Image (Please draw bounding boxes)', interactive=True, brush_radius=20,
-            elem_id='image_upload'
-            ).style(height=360), gr.Checkbox(label="Follow up Question"), gr.Checkbox(label="Generate")],
-        outputs=[gr.Image(type="pil", label="Output Image"), gr.Markdown(markdown_default)], title=title,
-        description=description, article=article, theme=gr.themes.Soft(), examples=examples, allow_flagging="auto", )
+    inputs = [
+        gr.Textbox(lines=1, placeholder=None, label="Text Instruction"), 
+        gr.Image(type="filepath", label="Input Image"),
+        gr.Checkbox(label="Follow up Question"), 
+        gr.Checkbox(label="Generate")
+    ]
+
+    outputs=[
+        gr.Image(type="pil", label="Output Image"), 
+        gr.Markdown(markdown_default)
+    ]
+    
+    demo = gr.Interface(inference, inputs=inputs, outputs=outputs, 
+                    title=title, description=description, article=article, 
+                    theme=gr.themes.Ocean(), examples=examples, allow_flagging="auto")
 
     demo.queue()
-    demo.launch()
+    demo.launch(share=True, server_port=4095)

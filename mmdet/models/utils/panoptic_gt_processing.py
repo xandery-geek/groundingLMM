@@ -1,9 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from typing import Tuple
+
 import torch
+from torch import Tensor
 
 
-def preprocess_panoptic_gt(gt_labels, gt_masks, gt_semantic_seg, num_things,
-                           num_stuff):
+def preprocess_panoptic_gt(gt_labels: Tensor, gt_masks: Tensor,
+                           gt_semantic_seg: Tensor, num_things: int,
+                           num_stuff: int) -> Tuple[Tensor, Tensor]:
     """Preprocess the ground truth for a image.
 
     Args:
@@ -11,29 +15,33 @@ def preprocess_panoptic_gt(gt_labels, gt_masks, gt_semantic_seg, num_things,
             with shape (num_gts, ).
         gt_masks (BitmapMasks): Ground truth masks of each instances
             of a image, shape (num_gts, h, w).
-        gt_semantic_seg (Tensor): Ground truth of semantic
+        gt_semantic_seg (Tensor | None): Ground truth of semantic
             segmentation with the shape (1, h, w).
             [0, num_thing_class - 1] means things,
             [num_thing_class, num_class-1] means stuff,
-            255 means VOID.
-        target_shape (tuple[int]): Shape of output mask_preds.
-            Resize the masks to shape of mask_preds.
+            255 means VOID. It's None when training instance segmentation.
 
     Returns:
-        tuple: a tuple containing the following targets.
+        tuple[Tensor, Tensor]: a tuple containing the following targets.
 
             - labels (Tensor): Ground truth class indices for a
                 image, with shape (n, ), n is the sum of number
                 of stuff type and number of instance in a image.
             - masks (Tensor): Ground truth mask for a image, with
-                shape (n, h, w).
+                shape (n, h, w). Contains stuff and things when training
+                panoptic segmentation, and things only when training
+                instance segmentation.
     """
     num_classes = num_things + num_stuff
+    things_masks = gt_masks.to_tensor(
+        dtype=torch.bool, device=gt_labels.device)
+
+    if gt_semantic_seg is None:
+        masks = things_masks.long()
+        return gt_labels, masks
+
     things_labels = gt_labels
     gt_semantic_seg = gt_semantic_seg.squeeze(0)
-
-    things_masks = gt_masks.pad(gt_semantic_seg.shape[-2:], pad_val=0)\
-        .to_tensor(dtype=torch.bool, device=gt_labels.device)
 
     semantic_labels = torch.unique(
         gt_semantic_seg,

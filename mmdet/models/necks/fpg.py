@@ -2,9 +2,9 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import ConvModule
-from mmcv.runner import BaseModule
+from mmengine.model import BaseModule
 
-from ..builder import NECKS
+from mmdet.registry import MODELS
 
 
 class Transition(BaseModule):
@@ -101,7 +101,7 @@ class LastConv(Transition):
         return self.conv_out(inputs[-1])
 
 
-@NECKS.register_module()
+@MODELS.register_module()
 class FPG(BaseModule):
     """FPG.
 
@@ -212,14 +212,14 @@ class FPG(BaseModule):
         self.skip_inds = skip_inds
         assert len(self.skip_inds[0]) <= self.stack_times
 
-        if end_level == -1:
+        if end_level == -1 or end_level == self.num_ins - 1:
             self.backbone_end_level = self.num_ins
             assert num_outs >= self.num_ins - start_level
         else:
-            # if end_level < inputs, no extra level is allowed
-            self.backbone_end_level = end_level
-            assert end_level <= len(in_channels)
-            assert num_outs == end_level - start_level
+            # if end_level is not the last level, no extra level is allowed
+            self.backbone_end_level = end_level + 1
+            assert end_level < self.num_ins
+            assert num_outs == end_level - start_level + 1
         self.start_level = start_level
         self.end_level = end_level
         self.add_extra_convs = add_extra_convs

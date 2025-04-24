@@ -1,14 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import ConvModule, caffe2_xavier_init
+from mmcv.cnn import ConvModule
 from mmcv.ops.merge_cells import ConcatCell
-from mmcv.runner import BaseModule
+from mmengine.model import BaseModule, caffe2_xavier_init
 
-from ..builder import NECKS
+from mmdet.registry import MODELS
 
 
-@NECKS.register_module()
+@MODELS.register_module()
 class NASFCOS_FPN(BaseModule):
     """FPN structure in NASFPN.
 
@@ -53,13 +53,14 @@ class NASFCOS_FPN(BaseModule):
         self.norm_cfg = norm_cfg
         self.conv_cfg = conv_cfg
 
-        if end_level == -1:
+        if end_level == -1 or end_level == self.num_ins - 1:
             self.backbone_end_level = self.num_ins
             assert num_outs >= self.num_ins - start_level
         else:
-            self.backbone_end_level = end_level
-            assert end_level <= len(in_channels)
-            assert num_outs == end_level - start_level
+            # if end_level is not the last level, no extra level is allowed
+            self.backbone_end_level = end_level + 1
+            assert end_level < self.num_ins
+            assert num_outs == end_level - start_level + 1
         self.start_level = start_level
         self.end_level = end_level
         self.add_extra_convs = add_extra_convs
